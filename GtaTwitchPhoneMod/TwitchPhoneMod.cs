@@ -255,13 +255,23 @@ public class TwitchPhoneMod : Script
 
         Vector3 pPos = ped.Position;
 
+        // isNetwork = false: this phone is a purely local visual prop, it never
+        // needs to sync to other players. Creating it as a networked object (the
+        // original `true`) pulls in GTA Online's network-entity ownership rules,
+        // which are much stricter on the Enhanced build — deleting a networked
+        // object without going through that ownership handshake is a known cause
+        // of exactly this kind of access violation inside DELETE_OBJECT.
         phoneObjectEntity = Function.Call<int>(
             Hash.CREATE_OBJECT,
             (int)phoneModelHash,
             pPos.X, pPos.Y, pPos.Z,
-            true, true, false
+            false, true, false
         );
 
+        // NOT marked as a mission entity anymore: since we no longer delete this
+        // object ourselves (see DeletePhoneObject), we want the game's own ambient
+        // cleanup to reclaim it naturally once it's hidden/frozen — a mission
+        // entity would stick around forever instead.
         // Bone ID 28422 = PH_R_Hand (right hand palm bone).
         int boneIndex = Function.Call<int>(Hash.GET_PED_BONE_INDEX, ped, 28422);
 
@@ -282,13 +292,19 @@ public class TwitchPhoneMod : Script
     {
         if (phoneObjectEntity != 0 && Function.Call<bool>(Hash.DOES_ENTITY_EXIST, phoneObjectEntity))
         {
-            // Deliberately using the raw native here, NOT GTA.Entity.FromHandle().
-            // FromHandle() goes through SHVDN's NativeMemory pattern-scanning layer
-            // (GetEntityAddress), which is what actually crashed on this GTA5
-            // Enhanced build (see notes below). The plain native call below is the
-            // same call path CreateAndAttachPhone/ATTACH_ENTITY_TO_ENTITY already use
-            // successfully, so it doesn't touch that fragile subsystem at all.
-            Function.Call(Hash.DELETE_OBJECT, phoneObjectEntity);
+            // We've now confirmed BOTH DELETE_OBJECT and DELETE_ENTITY crash here,
+            // even after detaching first — something about this native's
+            // deallocation path is broken on this specific build/handle. Rather than
+            // chase a third deletion native, we stop trying to destroy the entity
+            // at all: detach it, hide it, drop its collision, and freeze it in
+            // place. We never mark it as a mission entity, so GTA's own ambient
+            // object cleanup reclaims it on its own over time — we just stop
+            // tracking it here.
+            Function.Call(Hash.DETACH_ENTITY, phoneObjectEntity, true, true);
+            Function.Call(Hash.SET_ENTITY_VISIBLE, phoneObjectEntity, false, false);
+            Function.Call(Hash.SET_ENTITY_COLLISION, phoneObjectEntity, false, true);
+            Function.Call(Hash.FREEZE_ENTITY_POSITION, phoneObjectEntity, true);
+
             phoneObjectEntity = 0;
         }
     }
