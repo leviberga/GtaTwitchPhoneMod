@@ -12,14 +12,12 @@ using System.Threading.Tasks;
 
 public class TwitchPhoneMod : Script
 {
-    // ------------------------------------------------------------
-    // CONFIG
-    // ------------------------------------------------------------
+
     private const string AnimDict = "cellphone@";
     private const string AnimName = "cellphone_text_to_call";
 
     // eScriptedAnimFlags: AF_HOLD_LAST_FRAME(2) + AF_UPPERBODY(16) + AF_SECONDARY(32)
-    // NOTE: we intentionally do NOT use AF_LOOPING(1) here — this anim is a one-shot
+    // NOTE: we intentionally do NOT use AF_LOOPING(1) here, this anim is a one-shot
     // "raise phone to ear" transition, not an idle loop. Looping it makes the arm
     // repeatedly rise and fall. HOLD_LAST_FRAME freezes the pose once it finishes.
     private const int AnimFlags = 2 + 16 + 32;
@@ -30,9 +28,8 @@ public class TwitchPhoneMod : Script
     private IWebSocketConnection clientSocket;
 
     // Messages arrive on Fleck's own thread. We never touch game state or call
-    // natives directly from OnMessage — we just enqueue, and drain the queue
-    // from OnTick (the game's script thread). This removes the race condition
-    // that was very likely behind the end-of-call crash.
+    // natives directly from OnMessage, we just enqueue, and drain the queue
+    // from OnTick (the game's script thread).
     private readonly ConcurrentQueue<string> incomingMessages = new ConcurrentQueue<string>();
 
     private enum CallState
@@ -60,14 +57,14 @@ public class TwitchPhoneMod : Script
     private WaveOutEvent outputDevice;
 
     // Set only from NAudio's own PlaybackStopped callback (see OnPlaybackStopped).
-    // OnTick just reads this flag — it never touches outputDevice/audioFile directly
+    // OnTick just reads this flag, it never touches outputDevice/audioFile directly
     // to decide when the call ended, avoiding a race with NAudio's internal thread.
     private volatile bool audioPlaybackEnded = false;
 
     // Grace period between "audio finished" and actually disposing the NAudio
     // objects. NAudio's own author warns against calling back into the driver
     // (Stop/Dispose) from inside PlaybackStopped itself, since depending on the
-    // backend that thread may still be unwinding — so we wait a beat and do the
+    // backend that thread may still be unwinding, so we wait a beat and do the
     // disposal from the main game thread instead.
     private const int AudioCleanupGraceMs = 250;
     private int audioEndedAtGameTime = 0;
@@ -92,7 +89,7 @@ public class TwitchPhoneMod : Script
                 server.Start(socket =>
                 {
                     socket.OnOpen = () => clientSocket = socket;
-                    // Only enqueue here — never mutate state or call natives from this thread.
+
                     socket.OnMessage = message => incomingMessages.Enqueue(message);
                     socket.OnClose = () => clientSocket = null;
                 });
@@ -108,8 +105,7 @@ public class TwitchPhoneMod : Script
         try
         {
             // Drain any messages that arrived from Java since the last tick.
-            // This always runs on the main script thread, so it's safe to
-            // touch currentState / call natives here.
+          
             while (incomingMessages.TryDequeue(out string message))
             {
                 HandleJavaMessage(message);
@@ -146,7 +142,7 @@ public class TwitchPhoneMod : Script
                     {
                         StopRingtone();
 
-                        // Attach the physical 3D phone to the hand (unchanged — already working).
+                        
                         CreateAndAttachPhone(playerPed);
 
                         Function.Call(Hash.REQUEST_ANIM_DICT, AnimDict);
@@ -161,8 +157,8 @@ public class TwitchPhoneMod : Script
                     break;
 
                 case CallState.LoadingAnimation:
-                    // Wait for the dict to actually finish loading before playing the
-                    // anim. This is the fix for "the animation sometimes doesn't play at all".
+                    // Wait for the dict to actually finish loading before playing the anim
+                    
                     if (Function.Call<bool>(Hash.HAS_ANIM_DICT_LOADED, AnimDict))
                     {
                         Function.Call(
@@ -180,14 +176,14 @@ public class TwitchPhoneMod : Script
                             false
                         );
 
-                        // Only now — with the animation actually queued — do we start audio.
+                       
                         StartVoicePlayback();
                         currentState = CallState.InCall;
                     }
                     else if (Game.GameTime - animLoadStartTime > AnimDictLoadTimeoutMs)
                     {
                         // Safety net: if the dict never loads (disk hiccup, bad name, etc.)
-                        // don't hang forever in this state — bail out cleanly.
+                        // don't hang forever in this state, bail out cleanly.
                         Notification.Show("~r~Falha ao carregar animação do telefone.");
                         StopCallComplete();
                     }
@@ -217,8 +213,7 @@ public class TwitchPhoneMod : Script
         }
         catch (Exception ex)
         {
-            // A single bad frame should never be able to crash the whole game.
-            // Log it, reset to a clean state, and keep going.
+            
             Notification.Show($"~r~TwitchPhoneMod erro: {ex.Message}");
             StopCallComplete();
         }
@@ -256,9 +251,9 @@ public class TwitchPhoneMod : Script
         Vector3 pPos = ped.Position;
 
         // isNetwork = false: this phone is a purely local visual prop, it never
-        // needs to sync to other players. Creating it as a networked object (the
-        // original `true`) pulls in GTA Online's network-entity ownership rules,
-        // which are much stricter on the Enhanced build — deleting a networked
+        // needs to sync to other players. Creating it as a networked object
+        // pulls in GTA Online's network-entity ownership rules,
+        // which are much stricter on the Enhanced build, deleting a networked
         // object without going through that ownership handshake is a known cause
         // of exactly this kind of access violation inside DELETE_OBJECT.
         phoneObjectEntity = Function.Call<int>(
@@ -270,7 +265,7 @@ public class TwitchPhoneMod : Script
 
         // NOT marked as a mission entity anymore: since we no longer delete this
         // object ourselves (see DeletePhoneObject), we want the game's own ambient
-        // cleanup to reclaim it naturally once it's hidden/frozen — a mission
+        // cleanup to reclaim it naturally once it's hidden/frozen, a mission
         // entity would stick around forever instead.
         // Bone ID 28422 = PH_R_Hand (right hand palm bone).
         int boneIndex = Function.Call<int>(Hash.GET_PED_BONE_INDEX, ped, 28422);
@@ -292,14 +287,13 @@ public class TwitchPhoneMod : Script
     {
         if (phoneObjectEntity != 0 && Function.Call<bool>(Hash.DOES_ENTITY_EXIST, phoneObjectEntity))
         {
-            // We've now confirmed BOTH DELETE_OBJECT and DELETE_ENTITY crash here,
-            // even after detaching first — something about this native's
+            // Both DELETE_OBJECT and DELETE_ENTITY crash here,
+            // even after detaching first, something about this native's
             // deallocation path is broken on this specific build/handle. Rather than
             // chase a third deletion native, we stop trying to destroy the entity
             // at all: detach it, hide it, drop its collision, and freeze it in
             // place. We never mark it as a mission entity, so GTA's own ambient
-            // object cleanup reclaims it on its own over time — we just stop
-            // tracking it here.
+            // object cleanup reclaims it on its own over time.
             Function.Call(Hash.DETACH_ENTITY, phoneObjectEntity, true, true);
             Function.Call(Hash.SET_ENTITY_VISIBLE, phoneObjectEntity, false, false);
             Function.Call(Hash.SET_ENTITY_COLLISION, phoneObjectEntity, false, true);
@@ -311,6 +305,8 @@ public class TwitchPhoneMod : Script
 
     private void StopCallComplete()
     {
+        bool wasActuallyInACall = currentState != CallState.Idle;
+
         StopRingtone();
         CleanUpAudio();
         DeletePhoneObject();
@@ -325,6 +321,27 @@ public class TwitchPhoneMod : Script
         soundId = -1;
         audioPlaybackEnded = false;
         currentState = CallState.Idle;
+
+        // Tell Java this call's lifecycle is over, answered & finished, or declined,
+        // or aborted by a timeout/error, so its queue can move on to the next caller.
+        // Guarded so we don't fire a spurious signal if StopCallComplete is ever
+        // called when there was nothing actually in progress.
+        if (wasActuallyInACall)
+        {
+            NotifyJavaCallComplete();
+        }
+    }
+
+    private void NotifyJavaCallComplete()
+    {
+        try
+        {
+            clientSocket?.Send("LIGACAO_CONCLUIDA");
+        }
+        catch (Exception)
+        {
+            
+        }
     }
 
     private void RenderPremiumPhoneHUD()
@@ -435,12 +452,12 @@ public class TwitchPhoneMod : Script
         }
     }
 
-    // Fired by NAudio itself once the buffer is fully drained — either because the
+    // Fired by NAudio itself once the buffer is fully drained, either because the
     // clip ended naturally or Stop() was called. NAudio's author explicitly warns
     // against calling back into the driver (Stop/Dispose) from inside this handler,
     // since depending on the backend the playback thread may not be fully done
     // unwinding yet, which can deadlock or crash the host process. So this handler
-    // does nothing but flip a plain bool — actual cleanup happens later, on the main
+    // does nothing but flip a plain bool, actual cleanup happens later, on the main
     // thread, in StopCallComplete (via the Ending state's grace period).
     private void OnPlaybackStopped(object sender, StoppedEventArgs e)
     {
@@ -464,9 +481,7 @@ public class TwitchPhoneMod : Script
             if (outputDevice != null)
             {
                 outputDevice.PlaybackStopped -= OnPlaybackStopped;
-                // No need to call Stop() here: this either runs from inside the
-                // PlaybackStopped handler itself (already stopped) or from a
-                // manual cancel — WaveOutEvent.Dispose() stops playback on its own.
+             
                 outputDevice.Dispose();
                 outputDevice = null;
             }
